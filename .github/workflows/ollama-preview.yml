@@ -1,0 +1,39 @@
+name: Ollama remediation preview
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  preview:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Start Ollama
+        run: |
+          docker run --detach --name ollama \
+            --publish 127.0.0.1:11434:11434 \
+            --env OLLAMA_NO_CLOUD=1 \
+            ollama/ollama:latest
+
+          if ! curl --fail --silent --show-error \
+            --retry 15 --retry-all-errors --retry-delay 2 --max-time 3 \
+            http://127.0.0.1:11434/api/tags > /dev/null; then
+            docker logs ollama
+            exit 1
+          fi
+
+      - name: Pull the model
+        run: docker exec ollama ollama pull qwen3:4b-instruct
+
+      - name: Run remediation preview
+        run: |
+          python3 -m venv .venv
+          .venv/bin/python -m pip install ollama pydantic
+          .venv/bin/python propose_groups.py remediation-input.json
+          
