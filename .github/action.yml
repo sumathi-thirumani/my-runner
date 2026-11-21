@@ -1,0 +1,66 @@
+---
+name: Start Ollama
+description: Start Ollama in Docker and preload the configured model.
+
+inputs:
+  model:
+    description: Ollama model to load.
+    required: true
+
+runs:
+  using: composite
+  steps:
+    - name: Set Ollama constants
+      id: config
+      shell: bash
+      run: |
+        {
+          echo 'image=ollama/ollama:latest'
+          echo 'container=ollama'
+          echo 'port=11434'
+          echo "models_dir=${RUNNER_TEMP}/ollama-models"
+        } >> "$GITHUB_OUTPUT"
+
+    - name: Cache Ollama model files
+      uses: actions/cache@v4
+      with:
+        path: ${{ steps.config.outputs.models_dir }}
+        key: ollama-models-${{ runner.os }}-${{ inputs.model }}
+
+    - name: Start Ollama and load the model
+      shell: bash
+      env:
+        OLLAMA_MODEL: ${{ inputs.model }}
+        OLLAMA_IMAGE: ${{ steps.config.outputs.image }}
+        OLLAMA_CONTAINER: ${{ steps.config.outputs.container }}
+        OLLAMA_PORT: ${{ steps.config.outputs.port }}
+        OLLAMA_MODELS_DIR: ${{ steps.config.outputs.models_dir }}
+      run: |
+        readonly ollama_host="http://127.0.0.1:${OLLAMA_PORT}"
+        mkdir -p "$OLLAMA_MODELS_DIR"
+
+        docker run --detach --name "$OLLAMA_CONTAINER" \
+          --publish "127.0.0.1:${OLLAMA_PORT}:11434" \
+          --env OLLAMA_NO_CLOUD=1 \
+          --env OLLAMA_KEEP_ALIVE=-1 \
+          --volume "${OLLAMA_MODELS_DIR}:/root/.ollama/models" \
+          "$OLLAMA_IMAGE"
+
+        if ! curl --fail --silent --show-error \
+          --retry 15 --retry-all-errors --retry-delay 2 --max-time 3 \
+          "${ollama_host}/api/tags" > /dev/null; then
+          docker logs "$OLLAMA_CONTAINER"
+          exit 1
+        fi
+
+        if ! docker exec "$OLLAMA_CONTAINER" ollama show "$OLLAMA_MODEL" \
+          > /dev/null 2>&1; then
+          docker exec "$OLLAMA_CONTAINER" ollama pull "$OLLAMA_MODEL"
+        fi
+
+        docker exec "$OLLAMA_CONTAINER" ollama run "$OLLAMA_MODEL" ""
+
+        {
+          printf 'OLLAMA_HOST=%s\n' "$ollama_host"
+          printf 'OLLAMA_MODEL=%s\n' "$OLLAMA_MODEL"
+        } >> "$GITHUB_ENV"
